@@ -8,8 +8,6 @@ import { AppError } from "../errors.js";
 import { config } from "../config.js";
 import { dbPool } from "./db-pool.js";
 
-const currentFile = typeof __filename !== "undefined" ? __filename : fileURLToPath(import.meta.url);
-
 interface AffectedRowsLike {
   affectedRows: number | bigint;
 }
