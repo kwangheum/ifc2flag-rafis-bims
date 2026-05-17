@@ -99,7 +99,6 @@ export class IfcMetadataService {
   async persistConversionMetadata(input: PersistMetadataInput) {
     const extracted = await this.extractMetadata(input.sourcePath);
     extracted.elements = await this.attachLocalIds(input.fragmentPath, extracted.elements);
-    extracted.elements = extracted.elements.filter((element) => element.propertySets.length > 0);
     let connection: PoolConnection | undefined;
 
     try {
@@ -850,7 +849,7 @@ export class IfcMetadataService {
         const propertySetId = propertySetIdByKey.get(
           `${elementId}|${element.expressId}|${propertySet.propertySetName}`
         );
-        if (!propertySetId) {
+        if (propertySetId === undefined) {
           continue;
         }
 
