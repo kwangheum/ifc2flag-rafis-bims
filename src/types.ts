@@ -1,5 +1,4 @@
 export interface ConversionResult {
-  conversionId: string;
   sourceFileName: string;
   sourcePath: string;
   sourceRelativePath: string | null;

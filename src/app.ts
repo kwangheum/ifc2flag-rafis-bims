@@ -8,7 +8,6 @@ export function createApp() {
 
   app.use(express.json());
   app.use("/files", express.static(config.uploadRoot));
-  app.use(express.static(config.publicDir));
 
   app.get("/health", (_req, res) => {
     res.json({ ok: true });

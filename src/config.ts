@@ -24,8 +24,6 @@ const db = {
   password: "bim!!@#"
 };
 
-// const uploadRoot = path.join(projectRoot, "uploadFiles");
-const publicDir = path.join(projectRoot, "public");
 const bundledWebIfcPath = path.join(projectRoot, "web-ifc");
 const installedWebIfcPath = path.join(projectRoot, "node_modules", "web-ifc");
 const webIfcPath =
@@ -35,8 +33,7 @@ export const config = {
   port: 3000,
   projectRoot,
   uploadRoot,
-  publicDir,
   webIfcPath,
   db,
-  isExcludeInfo: false//공단에서 BIM 데이터 속성 정보 예시를 A1~6까지 시작하는 것만 넣을지 여부false면 모든 속성정보를 insert 한다. true : A1~6까지만 넣기 false : 전체 다 넣기
+  isExcludeInfo: false//공단에서 BIM 데이터 속성 정보 예시를 A1~6까지 시작하는 것만 넣을지 여부false면 모든 속성정보를 insert 한다.
 };

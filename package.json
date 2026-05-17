@@ -8,19 +8,16 @@
     "start": "node --enable-source-maps dist/index.js",
     "build": "tsc -p tsconfig.json",
     "build:bundle": "node scripts/build-bundle.mjs",
-    "check": "tsc --noEmit",
-    "convert:attachments": "tsx src/convertAtt.ts"
+    "check": "tsc --noEmit"
   },
   "dependencies": {
     "@thatopen/fragments": "3.3.5",
     "express": "5.1.0",
     "mariadb": "3.5.2",
-    "multer": "2.0.2",
     "web-ifc": "0.0.77"
   },
   "devDependencies": {
     "@types/express": "5.0.3",
-    "@types/multer": "2.0.0",
     "@types/node": "24.5.2",
     "esbuild": "0.27.1",
     "tsx": "4.20.5",

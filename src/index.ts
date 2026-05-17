@@ -3,10 +3,7 @@ import { config } from "./config.js";
 import { ensureDir } from "./utils/fs.js";
 
 async function bootstrap() {
-  await Promise.all([
-    ensureDir(config.uploadRoot),
-    ensureDir(config.publicDir)
-  ]);
+  await ensureDir(config.uploadRoot);
 
   const app = createApp();
 

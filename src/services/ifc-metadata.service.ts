@@ -10,9 +10,16 @@ import { dbPool } from "./db-pool.js";
 
 const currentFile = typeof __filename !== "undefined" ? __filename : fileURLToPath(import.meta.url);
 
-interface InsertResultLike {
-  insertId: number | bigint | string;
+interface AffectedRowsLike {
+  affectedRows: number | bigint;
 }
+
+interface FileAuditMetadata {
+  lastUpdusrId: string;
+  lastUpdtDt: Date | string;
+}
+
+type MetadataValue = string | number | Date | null;
 
 interface PersistMetadataInput {
   attachmentId?: string | null;
@@ -88,6 +95,7 @@ const ALLOWED_PROPERTY_PREFIXES = ["A1_", "A2_", "A3_", "A4_", "A5_", "A6_"];
 let ifcApiPromise: Promise<import("web-ifc").IfcAPI> | null = null;
 
 export class IfcMetadataService {
+  // 변환된 FRAG 파일과 원본 IFC 파일에서 필요한 메타데이터를 뽑아 TB_IFC_* 테이블에 저장합니다.
   async persistConversionMetadata(input: PersistMetadataInput) {
     const extracted = await this.extractMetadata(input.sourcePath);
     extracted.elements = await this.attachLocalIds(input.fragmentPath, extracted.elements);
@@ -98,34 +106,60 @@ export class IfcMetadataService {
       connection = await dbPool.getConnection();
       await connection.beginTransaction();
 
-      await this.deleteExistingModel(connection, input.attachmentId ?? null, input.sourcePath);
+      if (!input.attachmentId) {
+        throw new AppError(400, "BIM_FILE_ID가 필요합니다.");
+      }
+
+      const auditMetadata = await this.getFileAuditMetadata(connection, input.attachmentId);
+
+      await this.deleteExistingModelDetails(connection, input.attachmentId);
+
+      const result = await connection.query<AffectedRowsLike>(
+        `UPDATE BIM_CM016D_TB SET
+          MODEL_GUID = ?,
+          IFC_PROJECT_NM = ?,
+          IFC_SCHEMA_NM = ?,
+          IFC_CNVR_MG = ?,
+          IFC_CNVR_FILE_PATH = ?,
+          IFC_CNVR_FILE_NM = ?,
+          FRST_REGISTER_ID = ?,
+          FRST_REGIST_DT = ?,
+          LAST_UPDUSR_ID = ?,
+          LAST_UPDT_DT = ?
+        WHERE BIM_FILE_ID = ?`,
+        [
+          extracted.modelGuid,
+          extracted.projectName,
+          extracted.schemaName,
+          input.fragmentSize,
+          input.fragmentRelativePath ? path.dirname(input.fragmentRelativePath) : null,
+          input.fragmentFileName,
+          auditMetadata.lastUpdusrId,
+          auditMetadata.lastUpdtDt,
+          auditMetadata.lastUpdusrId,
+          auditMetadata.lastUpdtDt,
+          input.attachmentId
+        ]
+      );
+
+      if (Number(result.affectedRows) === 0) {
+        throw new AppError(404, `BIM 모델 정보를 찾을 수 없습니다. BIM_FILE_ID=${input.attachmentId}`);
+      }
 
       if (extracted.elements.length === 0) {
         await connection.commit();
         return null;
       }
 
-      const insertModelResult = await connection.query<InsertResultLike>(
-        `INSERT INTO TB_IFC_MODEL (
-          ATCHMNFL_SN,
-          FRAGMENT_SIZE,
-          MODEL_GUID,
-          PROJECT_NAME,
-          SCHEMA_NAME
-        ) VALUES (?, ?, ?, ?, ?)`,
-        [
-          input.attachmentId ?? null,
-          input.fragmentSize,
-          extracted.modelGuid,
-          extracted.projectName,
-          extracted.schemaName
-        ]
+      await this.insertElements(
+        connection,
+        input.attachmentId,
+        extracted.elements,
+        auditMetadata
       );
 
-      const modelId = Number(insertModelResult.insertId);
-      await this.insertElements(connection, modelId, extracted.elements);
       await connection.commit();
-      return modelId;
+      return null;
     } catch (error) {
       await connection?.rollback().catch(() => undefined);
       throw new AppError(500, `IFC 메타데이터 저장에 실패했습니다: ${this.getMessage(error)}`);
@@ -134,6 +168,25 @@ export class IfcMetadataService {
     }
   }
 
+  private async getFileAuditMetadata(connection: PoolConnection, attachmentId: string) {
+    const rows = await connection.query<FileAuditMetadata[]>(
+      `SELECT
+         LAST_UPDUSR_ID AS lastUpdusrId,
+         LAST_UPDT_DT AS lastUpdtDt
+       FROM BIM_CM010D_TB
+       WHERE BIM_FILE_ID = ?`,
+      [attachmentId]
+    );
+
+    const metadata = rows[0];
+    if (!metadata?.lastUpdusrId || !metadata.lastUpdtDt) {
+      throw new AppError(404, `BIM 파일 정보를 찾을 수 없습니다. BIM_FILE_ID=${attachmentId}`);
+    }
+
+    return metadata;
+  }
+
+  // web-ifc로 IFC 모델을 열고 프로젝트 정보, 공간 구조, 요소 속성을 추출합니다.
   private async extractMetadata(sourcePath: string): Promise<ExtractedModelMetadata> {
     const api = await this.getIfcApi();
     const bytes = new Uint8Array(await fs.readFile(sourcePath));
@@ -162,6 +215,7 @@ export class IfcMetadataService {
     }
   }
 
+  // 모델의 모든 IfcElement 계열 객체를 순회하며 기본 정보와 속성 세트를 수집합니다.
   private async extractElements(
     api: import("web-ifc").IfcAPI,
     modelId: number,
@@ -178,7 +232,7 @@ export class IfcMetadataService {
         const line = api.GetLine(modelId, expressId, false, false);
         const psets = this.getPropertySetsForElement(api, modelId, expressId);
         const spatial = spatialMap.get(expressId);
-        const propertySets = this.extractPropertySets(psets);
+        const propertySets = this.extractPropertySets(api, psets);
 
         const position = this.extractPosition(line.ObjectPlacement);
 
@@ -186,7 +240,7 @@ export class IfcMetadataService {
           expressId,
           localId: null,
           globalId: this.unwrapString(line.GlobalId),
-          ifcClass: this.normalizeTypeName(line.type, typeInfo.typeName) ?? typeInfo.typeName,
+          ifcClass: typeInfo.typeName,
           name: this.unwrapString(line.Name),
           description: this.unwrapString(line.Description),
           objectType: this.unwrapString(line.ObjectType),
@@ -205,6 +259,7 @@ export class IfcMetadataService {
     return elements;
   }
 
+  // 요소에 직접 연결된 Pset과 타입 객체를 통해 상속된 Pset을 함께 찾아옵니다.
   private getPropertySetsForElement(
     api: import("web-ifc").IfcAPI,
     modelId: number,
@@ -274,11 +329,15 @@ export class IfcMetadataService {
     return propertySets;
   }
 
-  private extractPropertySets(propertySets: Array<Record<string, unknown>>) {
+  // 같은 이름의 property set을 병합하고 비어 있는 세트는 제외합니다.
+  private extractPropertySets(
+    api: import("web-ifc").IfcAPI,
+    propertySets: Array<Record<string, unknown>>
+  ) {
     const merged = new Map<string, ExtractedPropertySet>();
 
     for (const [index, propertySet] of propertySets.entries()) {
-      const extracted = this.extractPropertiesFromSet(propertySet, index);
+      const extracted = this.extractPropertiesFromSet(api, propertySet, index);
       if (extracted.properties.length === 0) {
         continue;
       }
@@ -302,10 +361,15 @@ export class IfcMetadataService {
     return [...merged.values()].sort((a, b) => a.sortOrder - b.sortOrder);
   }
 
-  private extractPropertiesFromSet(propertySet: Record<string, unknown>, propertySetSortOrder: number) {
+  // web-ifc가 풀어준 Pset/Qto 객체에서 저장 가능한 속성 목록을 만듭니다.
+  private extractPropertiesFromSet(
+    api: import("web-ifc").IfcAPI,
+    propertySet: Record<string, unknown>,
+    propertySetSortOrder: number
+  ) {
     const properties: ExtractedProperty[] = [];
     const propertySetName =
-      this.unwrapString(propertySet.Name) ?? this.normalizeTypeName(propertySet.type, "PSET") ?? "PSET";
+      this.unwrapString(propertySet.Name) ?? this.normalizeTypeName(api, propertySet.type, "PSET") ?? "PSET";
     const relationItems = Array.isArray(propertySet.HasProperties)
       ? propertySet.HasProperties
       : Array.isArray(propertySet.Quantities)
@@ -320,7 +384,7 @@ export class IfcMetadataService {
 
       const typedItem = item as Record<string, unknown>;
       const propertyName = this.unwrapString(typedItem.Name) ?? `PROPERTY_${sortOrder + 1}`;
-      const propertyType = this.normalizeTypeName(typedItem.type, null);
+      const propertyType = this.normalizeTypeName(api, typedItem.type, null);
       const normalizedValue = this.extractPropertyValue(typedItem);
       if (normalizedValue === null) {
         continue;
@@ -351,7 +415,7 @@ export class IfcMetadataService {
       properties.push(
         this.createPropertyRecord(
           key,
-          this.normalizeTypeName(propertySet.type, null),
+          this.normalizeTypeName(api, propertySet.type, null),
           normalizedValue,
           null,
           sortOrder
@@ -367,6 +431,7 @@ export class IfcMetadataService {
     };
   }
 
+  // 설정에 따라 A1_~A6_ 접두어 속성만 남기거나 전체 속성을 유지합니다.
   private filterAllowedProperties(properties: ExtractedProperty[]) {
     if (!config.isExcludeInfo) {
       return properties;
@@ -377,6 +442,7 @@ export class IfcMetadataService {
     );
   }
 
+  // 동일한 이름과 값을 가진 속성이 중복 저장되지 않도록 제거합니다.
   private deduplicateProperties(properties: ExtractedProperty[]) {
     const unique = new Map<string, ExtractedProperty>();
 
@@ -390,6 +456,7 @@ export class IfcMetadataService {
     return [...unique.values()];
   }
 
+  // IFC 속성 타입별 대표 값 필드를 찾아 일반 값과 단위명으로 정리합니다.
   private extractPropertyValue(property: Record<string, unknown>) {
     if ("NominalValue" in property) {
       return {
@@ -449,6 +516,7 @@ export class IfcMetadataService {
     return null;
   }
 
+  // DB 컬럼 길이와 타입 컬럼에 맞게 속성 한 건을 표준 형태로 만듭니다.
   private createPropertyRecord(
     propertyName: string,
     propertyType: string | null,
@@ -469,6 +537,7 @@ export class IfcMetadataService {
     };
   }
 
+  // JS 값 타입을 DB에 저장할 값 타입 문자열로 변환합니다.
   private getValueType(value: string | number | boolean | null) {
     if (typeof value === "string") {
       return "STRING";
@@ -482,6 +551,7 @@ export class IfcMetadataService {
     return null;
   }
 
+  // 검색/표시용 문자열 컬럼에 들어갈 값을 길이 제한에 맞춰 만듭니다.
   private toValueText(value: string | number | boolean | null) {
     if (value === null) {
       return null;
@@ -490,6 +560,7 @@ export class IfcMetadataService {
     return String(value).slice(0, MAX_VALUE_TEXT_LENGTH);
   }
 
+  // web-ifc의 래퍼 객체, 배열, 좌표 객체 등을 문자열/숫자/불리언 값으로 평탄화합니다.
   private normalizeValue(value: unknown): string | number | boolean | null {
     if (value === null || value === undefined) {
       return null;
@@ -540,16 +611,28 @@ export class IfcMetadataService {
     return null;
   }
 
+  // normalizeValue 결과를 문자열로 통일합니다.
   private unwrapString(value: unknown) {
     const normalized = this.normalizeValue(value);
     return normalized === null ? null : String(normalized);
   }
 
-  private normalizeTypeName(value: unknown, fallback: string | null) {
+  // IFC type 값을 사람이 읽을 수 있는 문자열로 바꾸고 없으면 fallback을 사용합니다.
+  private normalizeTypeName(
+    api: import("web-ifc").IfcAPI,
+    value: unknown,
+    fallback: string | null
+  ) {
+    if (typeof value === "number") {
+      const typeName = api.GetNameFromTypeCode(value);
+      return typeName || fallback;
+    }
+
     const normalized = this.unwrapString(value);
     return normalized ?? fallback;
   }
 
+  // ObjectPlacement의 상대 배치 좌표에서 x/y/z 값을 추출합니다.
   private extractPosition(objectPlacement: unknown) {
     if (!objectPlacement || typeof objectPlacement !== "object") {
       return null;
@@ -581,6 +664,7 @@ export class IfcMetadataService {
     return { x, y, z };
   }
 
+  // IFC 공간 트리를 순회해 각 expressID가 어느 층/공간 경로에 속하는지 매핑합니다.
   private async buildSpatialMap(api: import("web-ifc").IfcAPI, modelId: number) {
     const spatialMap = new Map<number, { levelName: string | null; spatialPath: string | null }>();
     const spatialTree = await api.properties.getSpatialStructure(modelId, true);
@@ -619,10 +703,12 @@ export class IfcMetadataService {
     return spatialMap;
   }
 
+  // 요소, property set, property를 순서대로 bulk insert하고 생성된 ID를 서로 연결합니다.
   private async insertElements(
     connection: PoolConnection,
-    modelId: number,
-    elements: ExtractedElement[]
+    attachmentId: string,
+    elements: ExtractedElement[],
+    auditMetadata: FileAuditMetadata
   ) {
     if (elements.length === 0) {
       return;
@@ -633,28 +719,30 @@ export class IfcMetadataService {
     for (let start = 0; start < elements.length; start += chunkSize) {
       const chunk = elements.slice(start, start + chunkSize);
       await connection.batch(
-        `INSERT INTO TB_IFC_ELEMENT (
-          MODEL_ID,
-          EXPRESS_ID,
-          LOCAL_ID,
-          GLOBAL_ID,
+        `INSERT INTO BIM_CM017D_TB (
+          BIM_FILE_ID,
+          OBJ_ID,
+          IFC_EXPRESS_ID,
           IFC_CLASS,
-          NAME,
-          DESCRIPTION,
-          OBJECT_TYPE,
-          PREDEFINED_TYPE,
-          TAG,
-          LEVEL_NAME,
-          SPATIAL_PATH,
-          X,
-          Y,
-          Z
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          OBJ_NM,
+          OBJ_DESC,
+          OBJ_TYPE,
+          OBJ_PREDEFINED_TYPE,
+          OBJ_TAG,
+          OBJ_LEVEL_NM,
+          OBJ_SPATIAL_PATH,
+          OBJ_X,
+          OBJ_Y,
+          OBJ_Z,
+          FRST_REGISTER_ID,
+          FRST_REGIST_DT,
+          LAST_UPDUSR_ID,
+          LAST_UPDT_DT
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         chunk.map((element) => [
-          modelId,
+          attachmentId,
+          element.globalId ?? String(element.expressId),
           element.expressId,
-          element.localId,
-          element.globalId,
           element.ifcClass,
           element.name,
           element.description,
@@ -665,24 +753,28 @@ export class IfcMetadataService {
           element.spatialPath,
           element.x,
           element.y,
-          element.z
+          element.z,
+          auditMetadata.lastUpdusrId,
+          auditMetadata.lastUpdtDt,
+          auditMetadata.lastUpdusrId,
+          auditMetadata.lastUpdtDt
         ])
       );
     }
 
-    const insertedElements = await connection.query<Array<{ ID: number; EXPRESS_ID: number }>>(
-      `SELECT ID, EXPRESS_ID
-       FROM TB_IFC_ELEMENT
-       WHERE MODEL_ID = ?`,
-      [modelId]
+    const insertedElements = await connection.query<Array<{ objId: string; expressId: number }>>(
+      `SELECT OBJ_ID AS objId, IFC_EXPRESS_ID AS expressId
+       FROM BIM_CM017D_TB
+       WHERE BIM_FILE_ID = ?`,
+      [attachmentId]
     );
 
-    const elementIdByExpressId = new Map<number, number>();
+    const elementIdByExpressId = new Map<number, string>();
     for (const row of insertedElements) {
-      elementIdByExpressId.set(Number(row.EXPRESS_ID), Number(row.ID));
+      elementIdByExpressId.set(Number(row.expressId), row.objId);
     }
 
-    const propertySetRows: Array<Array<string | number | null>> = [];
+    const propertySetRows: MetadataValue[][] = [];
 
     for (const element of elements) {
       const elementId = elementIdByExpressId.get(element.expressId);
@@ -692,10 +784,16 @@ export class IfcMetadataService {
 
       for (const propertySet of element.propertySets) {
         propertySetRows.push([
-          modelId,
+          attachmentId,
           elementId,
+          element.expressId,
+          propertySet.sortOrder,
           propertySet.propertySetName,
-          propertySet.sortOrder
+          propertySet.sortOrder,
+          auditMetadata.lastUpdusrId,
+          auditMetadata.lastUpdtDt,
+          auditMetadata.lastUpdusrId,
+          auditMetadata.lastUpdtDt
         ]);
       }
     }
@@ -703,34 +801,44 @@ export class IfcMetadataService {
     for (let start = 0; start < propertySetRows.length; start += chunkSize) {
       const chunk = propertySetRows.slice(start, start + chunkSize);
       await connection.batch(
-        `INSERT INTO TB_IFC_PROPERTY_SET (
-          MODEL_ID,
-          ELEMENT_ID,
-          PROPERTY_SET_NAME,
-          SORT_ORDER
-        ) VALUES (?, ?, ?, ?)`,
+        `INSERT INTO BIM_CM018D_TB (
+          BIM_FILE_ID,
+          OBJ_ID,
+          IFC_EXPRESS_ID,
+          PROPERTY_SN,
+          PROPERTY_NM,
+          ORDR,
+          FRST_REGISTER_ID,
+          FRST_REGIST_DT,
+          LAST_UPDUSR_ID,
+          LAST_UPDT_DT
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         chunk
       );
     }
 
     const insertedPropertySets = await connection.query<
-      Array<{ ID: number; ELEMENT_ID: number; PROPERTY_SET_NAME: string }>
+      Array<{ propertySn: number; objId: string; expressId: number; propertyName: string }>
     >(
-      `SELECT ID, ELEMENT_ID, PROPERTY_SET_NAME
-       FROM TB_IFC_PROPERTY_SET
-       WHERE MODEL_ID = ?`,
-      [modelId]
+      `SELECT
+         PROPERTY_SN AS propertySn,
+         OBJ_ID AS objId,
+         IFC_EXPRESS_ID AS expressId,
+         PROPERTY_NM AS propertyName
+       FROM BIM_CM018D_TB
+       WHERE BIM_FILE_ID = ?`,
+      [attachmentId]
     );
 
     const propertySetIdByKey = new Map<string, number>();
     for (const row of insertedPropertySets) {
       propertySetIdByKey.set(
-        `${Number(row.ELEMENT_ID)}|${row.PROPERTY_SET_NAME}`,
-        Number(row.ID)
+        `${row.objId}|${Number(row.expressId)}|${row.propertyName}`,
+        Number(row.propertySn)
       );
     }
 
-    const propertyRows: Array<Array<string | number | null>> = [];
+    const propertyRows: MetadataValue[][] = [];
 
     for (const element of elements) {
       const elementId = elementIdByExpressId.get(element.expressId);
@@ -739,24 +847,29 @@ export class IfcMetadataService {
       }
 
       for (const propertySet of element.propertySets) {
-        const propertySetId = propertySetIdByKey.get(`${elementId}|${propertySet.propertySetName}`);
+        const propertySetId = propertySetIdByKey.get(
+          `${elementId}|${element.expressId}|${propertySet.propertySetName}`
+        );
         if (!propertySetId) {
           continue;
         }
 
         for (const property of propertySet.properties) {
           propertyRows.push([
-            modelId,
+            attachmentId,
             elementId,
+            element.expressId,
             propertySetId,
+            property.sortOrder,
             property.propertyName,
-            property.propertyType,
-            property.valueType,
+            property.propertyType ?? property.valueType,
             property.valueText,
-            property.valueNumber,
-            property.valueBoolean,
             property.unitName,
-            property.sortOrder
+            property.sortOrder,
+            auditMetadata.lastUpdusrId,
+            auditMetadata.lastUpdtDt,
+            auditMetadata.lastUpdusrId,
+            auditMetadata.lastUpdtDt
           ]);
         }
       }
@@ -765,39 +878,48 @@ export class IfcMetadataService {
     for (let start = 0; start < propertyRows.length; start += chunkSize) {
       const chunk = propertyRows.slice(start, start + chunkSize);
       await connection.batch(
-        `INSERT INTO TB_IFC_PROPERTY (
-          MODEL_ID,
-          ELEMENT_ID,
-          PROPERTY_SET_ID,
-          PROPERTY_NAME,
-          PROPERTY_TYPE,
-          VALUE_TYPE,
-          VALUE_TEXT,
-          VALUE_NUMBER,
-          VALUE_BOOLEAN,
-          UNIT_NAME,
-          SORT_ORDER
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO BIM_CM019D_TB (
+          BIM_FILE_ID,
+          OBJ_ID,
+          IFC_EXPRESS_ID,
+          PROPERTY_SN,
+          PROPERTY_DETAIL_SN,
+          PROPERTY_DETAIL_NM,
+          PROPERTY_DETAIL_TYPE,
+          PROPERTY_DETAIL_VALUE,
+          PROPERTY_DETAIL_UNIT_NM,
+          ORDR,
+          FRST_REGISTER_ID,
+          FRST_REGIST_DT,
+          LAST_UPDUSR_ID,
+          LAST_UPDT_DT
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         chunk
       );
     }
   }
 
-  private async deleteExistingModel(
+  // 같은 첨부파일을 다시 변환할 때 이전 IFC 상세 메타데이터를 먼저 제거합니다.
+  private async deleteExistingModelDetails(
     connection: PoolConnection,
-    attachmentId: string | null,
-    sourcePath: string
+    attachmentId: string
   ) {
-    if (attachmentId) {
+    const metadataTables = [
+      "BIM_CM019D_TB",
+      "BIM_CM018D_TB",
+      "BIM_CM017D_TB"
+    ];
+
+    for (const tableName of metadataTables) {
       await connection.query(
-        `DELETE FROM TB_IFC_MODEL
-         WHERE ATCHMNFL_SN = ?`,
+        `DELETE FROM ${tableName}
+         WHERE BIM_FILE_ID = ?`,
         [attachmentId]
       );
-      return;
     }
   }
 
+  // web-ifc 초기화 비용을 줄이기 위해 IfcAPI 인스턴스를 프로세스 안에서 재사용합니다.
   private async getIfcApi() {
     if (!ifcApiPromise) {
       ifcApiPromise = this.initIfcApi();
@@ -806,6 +928,7 @@ export class IfcMetadataService {
     return ifcApiPromise;
   }
 
+  // web-ifc WASM 경로를 지정하고 IfcAPI를 초기화합니다.
   private async initIfcApi() {
     const api = new WebIFC.IfcAPI();
     const wasmPath = config.webIfcPath.endsWith(path.sep)
@@ -816,6 +939,7 @@ export class IfcMetadataService {
     return api;
   }
 
+  // FRAG 모델에서 globalId에 대응하는 localId를 찾아 IFC 요소 메타데이터에 보강합니다.
   private async attachLocalIds(fragmentPath: string, elements: ExtractedElement[]) {
     if (elements.length === 0) {
       return elements;
@@ -855,6 +979,7 @@ export class IfcMetadataService {
     }
   }
 
+  // unknown 타입 오류에서 운영 로그에 남길 메시지를 안전하게 꺼냅니다.
   private getMessage(error: unknown) {
     if (error instanceof Error) {
       return error.message;
