@@ -759,30 +759,12 @@ export class IfcMetadataService {
       );
     }
 
-    const insertedElements = await connection.query<Array<{ objId: string; expressId: number }>>(
-      `SELECT OBJ_ID AS objId, IFC_EXPRESS_ID AS expressId
-       FROM BIM_CM017D_TB
-       WHERE BIM_FILE_ID = ?`,
-      [attachmentId]
-    );
-
-    const elementIdByExpressId = new Map<number, string>();
-    for (const row of insertedElements) {
-      elementIdByExpressId.set(Number(row.expressId), row.objId);
-    }
-
     const propertySetRows: MetadataValue[][] = [];
 
     for (const element of elements) {
-      const elementId = elementIdByExpressId.get(element.expressId);
-      if (!elementId) {
-        continue;
-      }
-
       for (const propertySet of element.propertySets) {
         propertySetRows.push([
           attachmentId,
-          elementId,
           element.expressId,
           propertySet.sortOrder,
           propertySet.propertySetName,
@@ -800,7 +782,6 @@ export class IfcMetadataService {
       await connection.batch(
         `INSERT INTO BIM_CM018D_TB (
           BIM_FILE_ID,
-          OBJ_ID,
           IFC_EXPRESS_ID,
           PROPERTY_SN,
           PROPERTY_NM,
@@ -809,17 +790,16 @@ export class IfcMetadataService {
           FRST_REGIST_DT,
           LAST_UPDUSR_ID,
           LAST_UPDT_DT
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         chunk
       );
     }
 
     const insertedPropertySets = await connection.query<
-      Array<{ propertySn: number; objId: string; expressId: number; propertyName: string }>
+      Array<{ propertySn: number; expressId: number; propertyName: string }>
     >(
       `SELECT
          PROPERTY_SN AS propertySn,
-         OBJ_ID AS objId,
          IFC_EXPRESS_ID AS expressId,
          PROPERTY_NM AS propertyName
        FROM BIM_CM018D_TB
@@ -830,7 +810,7 @@ export class IfcMetadataService {
     const propertySetIdByKey = new Map<string, number>();
     for (const row of insertedPropertySets) {
       propertySetIdByKey.set(
-        `${row.objId}|${Number(row.expressId)}|${row.propertyName}`,
+        `${Number(row.expressId)}|${row.propertyName}`,
         Number(row.propertySn)
       );
     }
@@ -838,14 +818,9 @@ export class IfcMetadataService {
     const propertyRows: MetadataValue[][] = [];
 
     for (const element of elements) {
-      const elementId = elementIdByExpressId.get(element.expressId);
-      if (!elementId) {
-        continue;
-      }
-
       for (const propertySet of element.propertySets) {
         const propertySetId = propertySetIdByKey.get(
-          `${elementId}|${element.expressId}|${propertySet.propertySetName}`
+          `${element.expressId}|${propertySet.propertySetName}`
         );
         if (propertySetId === undefined) {
           continue;
@@ -854,7 +829,6 @@ export class IfcMetadataService {
         for (const property of propertySet.properties) {
           propertyRows.push([
             attachmentId,
-            elementId,
             element.expressId,
             propertySetId,
             property.sortOrder,
@@ -877,7 +851,6 @@ export class IfcMetadataService {
       await connection.batch(
         `INSERT INTO BIM_CM019D_TB (
           BIM_FILE_ID,
-          OBJ_ID,
           IFC_EXPRESS_ID,
           PROPERTY_SN,
           PROPERTY_DETAIL_SN,
@@ -890,7 +863,7 @@ export class IfcMetadataService {
           FRST_REGIST_DT,
           LAST_UPDUSR_ID,
           LAST_UPDT_DT
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         chunk
       );
     }
