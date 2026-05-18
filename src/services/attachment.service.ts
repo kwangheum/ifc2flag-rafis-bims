@@ -43,7 +43,7 @@ export class AttachmentService {
     }
   }
 
-  // 변환 요청이 들어오면 BIM_CM010D_TB 기준으로 BIM_CM016D_TB에 변환대기 row를 먼저 생성합니다.
+  // 변환 요청이 들어오면 BIM_CM010D_TB 기준으로 BIM_CM011D_TB에 변환대기 row를 먼저 생성합니다.
   async initializeConversionModel(attachmentId: string) {
     let connection: import("mariadb").PoolConnection | undefined;
 
@@ -54,10 +54,10 @@ export class AttachmentService {
       await this.deleteExistingConversionModel(connection, attachmentId);
 
       const result = await connection.query<AffectedRowsLike>(
-        `INSERT INTO BIM_CM016D_TB (
+        `INSERT INTO BIM_CM011D_TB (
           BIM_FILE_ID,
-          IFC_CNVR_STATUS_CD,
-          IFC_CNVR_FAILURE_REASON,
+          PROCESS_STTUS_CD,
+          PROCESS_FAILURE_CN,
           FRST_REGISTER_ID,
           FRST_REGIST_DT,
           LAST_UPDUSR_ID,
@@ -122,9 +122,9 @@ export class AttachmentService {
     try {
       connection = await dbPool.getConnection();
       await connection.query(
-        `UPDATE BIM_CM016D_TB
-         SET IFC_CNVR_STATUS_CD = ?,
-             IFC_CNVR_FAILURE_REASON = ?
+        `UPDATE BIM_CM011D_TB
+         SET PROCESS_STTUS_CD = ?,
+             PROCESS_FAILURE_CN = ?
          WHERE BIM_FILE_ID = ?`,
         [statusCode, failureReason, attachmentId]
       );
@@ -146,10 +146,10 @@ export class AttachmentService {
     attachmentId: string
   ) {
     const metadataTables = [
-      "BIM_CM019D_TB",
       "BIM_CM018D_TB",
       "BIM_CM017D_TB",
-      "BIM_CM016D_TB"
+      "BIM_CM016D_TB",
+      "BIM_CM011D_TB"
     ];
 
     for (const tableName of metadataTables) {

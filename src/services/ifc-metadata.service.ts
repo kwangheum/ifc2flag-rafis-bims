@@ -112,13 +112,13 @@ export class IfcMetadataService {
       await this.deleteExistingModelDetails(connection, input.attachmentId);
 
       const result = await connection.query<AffectedRowsLike>(
-        `UPDATE BIM_CM016D_TB SET
+        `UPDATE BIM_CM011D_TB SET
           MODEL_GUID = ?,
           IFC_PROJECT_NM = ?,
           IFC_SCHEMA_NM = ?,
-          IFC_CNVR_MG = ?,
-          IFC_CNVR_FILE_PATH = ?,
-          IFC_CNVR_FILE_NM = ?,
+          PROCESS_MG = ?,
+          PROCESS_PATH = ?,
+          PROCESS_NM = ?,
           FRST_REGISTER_ID = ?,
           FRST_REGIST_DT = ?,
           LAST_UPDUSR_ID = ?,
@@ -716,7 +716,7 @@ export class IfcMetadataService {
     for (let start = 0; start < elements.length; start += chunkSize) {
       const chunk = elements.slice(start, start + chunkSize);
       await connection.batch(
-        `INSERT INTO BIM_CM017D_TB (
+        `INSERT INTO BIM_CM016D_TB (
           BIM_FILE_ID,
           OBJ_ID,
           IFC_EXPRESS_ID,
@@ -780,7 +780,7 @@ export class IfcMetadataService {
     for (let start = 0; start < propertySetRows.length; start += chunkSize) {
       const chunk = propertySetRows.slice(start, start + chunkSize);
       await connection.batch(
-        `INSERT INTO BIM_CM018D_TB (
+        `INSERT INTO BIM_CM017D_TB (
           BIM_FILE_ID,
           IFC_EXPRESS_ID,
           PROPERTY_SN,
@@ -802,7 +802,7 @@ export class IfcMetadataService {
          PROPERTY_SN AS propertySn,
          IFC_EXPRESS_ID AS expressId,
          PROPERTY_NM AS propertyName
-       FROM BIM_CM018D_TB
+       FROM BIM_CM017D_TB
        WHERE BIM_FILE_ID = ?`,
       [attachmentId]
     );
@@ -849,7 +849,7 @@ export class IfcMetadataService {
     for (let start = 0; start < propertyRows.length; start += chunkSize) {
       const chunk = propertyRows.slice(start, start + chunkSize);
       await connection.batch(
-        `INSERT INTO BIM_CM019D_TB (
+        `INSERT INTO BIM_CM018D_TB (
           BIM_FILE_ID,
           IFC_EXPRESS_ID,
           PROPERTY_SN,
@@ -875,9 +875,9 @@ export class IfcMetadataService {
     attachmentId: string
   ) {
     const metadataTables = [
-      "BIM_CM019D_TB",
       "BIM_CM018D_TB",
-      "BIM_CM017D_TB"
+      "BIM_CM017D_TB",
+      "BIM_CM016D_TB"
     ];
 
     for (const tableName of metadataTables) {
