@@ -1,5 +1,5 @@
 import { AppError } from "../errors.js";
-import { dbPool } from "./db-pool.js";
+import { dbPool, type DbConnection } from "./db-pool.js";
 
 interface AttachmentPathRow {
   savePath: string;
@@ -13,14 +13,14 @@ interface AffectedRowsLike {
 export class AttachmentService {
   // 첨부파일 번호로 BIM_CM010D_TB의 FLPTH/STRE_NM을 조회해 원본 IFC 상대 경로를 만듭니다.
   async getSourcePath(attachmentId: string) {
-    let connection: import("mariadb").PoolConnection | undefined;
+    let connection: DbConnection | undefined;
 
     try {
       connection = await dbPool.getConnection();
       const rows = await connection.query<AttachmentPathRow[]>(
         `SELECT
-           BIM_FILE_PATH AS savePath,
-           BIM_FILE_NM AS saveFilename
+           BIM_FILE_PATH AS "savePath",
+           BIM_FILE_NM AS "saveFilename"
          FROM BIM_CM010D_TB
          WHERE BIM_FILE_ID = ?`,
         [attachmentId]
@@ -45,7 +45,7 @@ export class AttachmentService {
 
   // 변환 요청이 들어오면 BIM_CM010D_TB 기준으로 BIM_CM011D_TB에 변환대기 row를 먼저 생성합니다.
   async initializeConversionModel(attachmentId: string) {
-    let connection: import("mariadb").PoolConnection | undefined;
+    let connection: DbConnection | undefined;
 
     try {
       connection = await dbPool.getConnection();
@@ -117,7 +117,7 @@ export class AttachmentService {
     statusCode: number,
     failureReason: string | null
   ) {
-    let connection: import("mariadb").PoolConnection | undefined;
+    let connection: DbConnection | undefined;
 
     try {
       connection = await dbPool.getConnection();
@@ -142,7 +142,7 @@ export class AttachmentService {
   }
 
   private async deleteExistingConversionModel(
-    connection: import("mariadb").PoolConnection,
+    connection: DbConnection,
     attachmentId: string
   ) {
     const metadataTables = [
@@ -172,7 +172,7 @@ export class AttachmentService {
     return `알 수 없는 오류 ${poolState}`;
   }
 
-  // MariaDB 커넥션 풀의 현재 사용량을 짧은 문자열로 만듭니다.
+  // DB 커넥션 풀의 현재 사용량을 짧은 문자열로 만듭니다.
   private getPoolState() {
     return `(pool: active=${dbPool.activeConnections()} idle=${dbPool.idleConnections()} total=${dbPool.totalConnections()} queue=${dbPool.taskQueueSize()})`;
   }

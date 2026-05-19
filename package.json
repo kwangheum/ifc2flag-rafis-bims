@@ -13,12 +13,14 @@
   "dependencies": {
     "@thatopen/fragments": "3.3.5",
     "express": "5.1.0",
-    "mariadb": "3.5.2",
+    "odbc": "2.4.9",
+    "oracledb": "6.9.0",
     "web-ifc": "0.0.77"
   },
   "devDependencies": {
     "@types/express": "5.0.3",
     "@types/node": "24.5.2",
+    "@types/oracledb": "^6.10.3",
     "esbuild": "0.27.1",
     "tsx": "4.20.5",
     "typescript": "5.9.2"

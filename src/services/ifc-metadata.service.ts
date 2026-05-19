@@ -2,11 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { SingleThreadedFragmentsModel } from "@thatopen/fragments";
-import type { PoolConnection } from "mariadb";
 import * as WebIFC from "web-ifc";
 import { AppError } from "../errors.js";
 import { config } from "../config.js";
-import { dbPool } from "./db-pool.js";
+import { dbPool, type DbConnection } from "./db-pool.js";
 
 interface AffectedRowsLike {
   affectedRows: number | bigint;
@@ -97,7 +96,7 @@ export class IfcMetadataService {
   async persistConversionMetadata(input: PersistMetadataInput) {
     const extracted = await this.extractMetadata(input.sourcePath);
     extracted.elements = await this.attachLocalIds(input.fragmentPath, extracted.elements);
-    let connection: PoolConnection | undefined;
+    let connection: DbConnection | undefined;
 
     try {
       connection = await dbPool.getConnection();
@@ -165,11 +164,11 @@ export class IfcMetadataService {
     }
   }
 
-  private async getFileAuditMetadata(connection: PoolConnection, attachmentId: string) {
+  private async getFileAuditMetadata(connection: DbConnection, attachmentId: string) {
     const rows = await connection.query<FileAuditMetadata[]>(
       `SELECT
-         LAST_UPDUSR_ID AS lastUpdusrId,
-         LAST_UPDT_DT AS lastUpdtDt
+         LAST_UPDUSR_ID AS "lastUpdusrId",
+         LAST_UPDT_DT AS "lastUpdtDt"
        FROM BIM_CM010D_TB
        WHERE BIM_FILE_ID = ?`,
       [attachmentId]
@@ -702,7 +701,7 @@ export class IfcMetadataService {
 
   // 요소, property set, property를 순서대로 bulk insert하고 생성된 ID를 서로 연결합니다.
   private async insertElements(
-    connection: PoolConnection,
+    connection: DbConnection,
     attachmentId: string,
     elements: ExtractedElement[],
     auditMetadata: FileAuditMetadata
@@ -799,9 +798,9 @@ export class IfcMetadataService {
       Array<{ propertySn: number; expressId: number; propertyName: string }>
     >(
       `SELECT
-         PROPERTY_SN AS propertySn,
-         IFC_EXPRESS_ID AS expressId,
-         PROPERTY_NM AS propertyName
+         PROPERTY_SN AS "propertySn",
+         IFC_EXPRESS_ID AS "expressId",
+         PROPERTY_NM AS "propertyName"
        FROM BIM_CM017D_TB
        WHERE BIM_FILE_ID = ?`,
       [attachmentId]
@@ -871,7 +870,7 @@ export class IfcMetadataService {
 
   // 같은 첨부파일을 다시 변환할 때 이전 IFC 상세 메타데이터를 먼저 제거합니다.
   private async deleteExistingModelDetails(
-    connection: PoolConnection,
+    connection: DbConnection,
     attachmentId: string
   ) {
     const metadataTables = [

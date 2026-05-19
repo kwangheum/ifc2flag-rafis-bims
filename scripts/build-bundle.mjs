@@ -19,6 +19,7 @@ await build({
   format: "esm",
   target: "node20",
   sourcemap: false,
+  external: ["oracledb", "odbc"],
   packages: "bundle",
   banner: {
     js: 'import { createRequire } from "node:module"; const require = createRequire(import.meta.url); const __dirname = decodeURIComponent(new URL(".", import.meta.url).pathname).replace(/\\/$/, "");',
@@ -40,6 +41,11 @@ node server.js
 Required runtime files in this folder:
 - server.js
 - web-ifc/*.wasm
+- node_modules/oracledb
+- node_modules/odbc
+
+Install native DB drivers on the server:
+npm install --omit=dev
 
 API:
 - POST /api/conversions/from-path

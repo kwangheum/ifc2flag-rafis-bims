@@ -7,22 +7,31 @@ const srcDir = path.dirname(currentFile);
 const dirName = path.basename(srcDir);
 const projectRoot = dirName === "src" || dirName === "dist" ? path.resolve(srcDir, "..") : srcDir;
 
-// const uploadRoot = "/data/files/platform";
-// const db = {
-//   host: "172.26.1.55",
-//   port: 3306,
-//   database: "krri",
-//   user: "krri",
-//   password: "Sa@5@W^^1"
-// };
+type DatabaseVendor = "oracle" | "tibero";
+type DatabaseEnvironment = "test" | "production";
+
+const activeDbEnvironment: DatabaseEnvironment = "test";
 const uploadRoot = "/Users/kwangheum/Downloads/files";
-const db = {
-  host: "ucore.iptime.org",
-  port: 11001,
-  database: "bimtemp",
-  user: "bimtemp",
-  password: "bim!!@#"
+const dbConfigs: Record<DatabaseEnvironment, {
+  vendor: DatabaseVendor;
+  connectString: string;
+  user: string;
+  password: string;
+}> = {
+  test: {
+    vendor: "oracle",
+    connectString: "192.168.123.200:11010/XE",
+    user: "RAFIS_BIM",
+    password: "RAFIS_BIM"
+  },
+  production: {
+    vendor: "tibero",
+    connectString: "DSN=TIBERO6;UID=XE;PWD=RAFIS_BIM",
+    user: "RAFIS_BIM",
+    password: "RAFIS_BIM"
+  }
 };
+const db = dbConfigs[activeDbEnvironment];
 
 const bundledWebIfcPath = path.join(projectRoot, "web-ifc");
 const installedWebIfcPath = path.join(projectRoot, "node_modules", "web-ifc");
@@ -31,6 +40,7 @@ const webIfcPath =
 
 export const config = {
   port: 3000,
+  activeDbEnvironment,
   projectRoot,
   uploadRoot,
   webIfcPath,
